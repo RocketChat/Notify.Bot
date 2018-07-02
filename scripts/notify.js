@@ -20,9 +20,8 @@
 //   bot delete <notify_id>
 
 module.exports = function (robot) {
-	var MONGODB_URL = process.env.MONGODB_URL || "mongodb://localhost:27017/hubot";
+	var MONGODB_URL = process.env.MONGODB_URL || "mongodb://localhost:27017/rocketchat";
 	var _ = require('underscore');
-	// const Conversation = require('hubot-conversation');
 	var dateFormat = require('dateformat');
 	// const Q = require('q');
 	// var targets = {};
@@ -164,12 +163,27 @@ module.exports = function (robot) {
 	}
 	const sendNotification = async function (res, users){
 		msg = res.params.message.trim();
+		let opt_split = 'options:';
+		//recognize options in message
+		if (msg.indexOf(opt_split)>-1){
+			options = msg.split(opt_split)[1].trim();
+			msg = msg.substring(0, msg.indexOf(opt_split));
+			var opt = options.split('\n');
+			console.debug(`\n\nOPTs found: ${opt} \n\n`);
+		}
 		receipts = [];
 		rids = [];
-		await _.each(users, async function (username) {
+		// add options back to message:
+		if (opt.length > 0) {
+			msg += '`'+ opt.join('` , `') + '` , `cancel`';
+		}
+		for(name in users){
+			username = users[name];
 			try{
 				// get room id
 				rid = await robot.adapter.driver.getDirectMessageRoomId(username);
+				
+				//send message
 				receipt = await robot.adapter.driver.sendToRoomId(msg, rid);
 				receipt['to'] = username;
 				small_receipt = {
@@ -183,7 +197,7 @@ module.exports = function (robot) {
 			} finally {
 				receipts.push(small_receipt);
 			}
-		});
+		}
 		notifications = robot.brain.get("notifications") || [];
 		notification = {
 			_id: res.message._id,
@@ -192,11 +206,30 @@ module.exports = function (robot) {
 			to: users,
 			rcpt: receipts
 		};
+		if(opt){
+			notification['options'] = opt;
+		}
 		notifications.push(notification);
 		robot.brain.set("notifications", notifications);
 		return receipts;
 	}
-
+	const removeFromVet = async function (vet, element){
+		let new_vet = [];
+		if(element.indexOf('@')>-1){
+			element = element.substring(1);
+		}
+		for (let i = 0; i< vet.length;i++){
+			console.log('>> test removing for ' + vet[i] + ' if == ' + element);
+			if(vet[i] != element && typeof vet[i] !== 'undefined'){
+				new_vet[i] = vet[i];
+			}else{
+				//discard element
+				console.debug(`\n\n>>>${element} deleted from vector`);
+			}
+		}
+		console.debug(`\n\n>> returning new_vet ${new_vet} `)
+		return new_vet;
+	}
 	// Set auth framework
 	robot.listenerMiddleware(function (context, next, done) {
 		context.response.params = context.response.params || {};
@@ -233,7 +266,32 @@ module.exports = function (robot) {
 				if (notifications[i].to.indexOf(context.response.message.user.name)>-1) {
 					for (let j = 0; j < notifications[i].rcpt.length; j++) {
 						if (context.response.message.user.name == notifications[i].rcpt[j].to) {
-							if (!notifications[i].rcpt[j].received || notifications[i].rcpt[j].received === undefined) notifications[i].rcpt[j].received = Date.now();
+							// set read receipt
+							if (!notifications[i].rcpt[j].received || notifications[i].rcpt[j].received === undefined) {
+								notifications[i].rcpt[j].received = Date.now();
+							}
+							// check if there are options to answer and the user did not answered them yet
+							if (notifications[i].options !== undefined && notifications[i].rcpt[j].option === undefined) {
+								resp = context.response.message.text.trim();
+								robot_name = robot.name || robot.alias;
+								if(resp.indexOf(robot_name)> -1){
+									resp = resp.substring(resp.indexOf(robot_name)+robot_name.length).trim();
+									console.debug(`\n\n>> Resp has robot.name in it, substring: ${resp}`);
+								}
+								console.debug('\n\n>>message obj:' + JSON.stringify(context.response.message));
+								if (notifications[i].options.indexOf(resp)>-1){
+									console.debug(`\nuser responded with a valid option\n`);
+									notifications[i].rcpt[j].option = notifications[i].options.indexOf(resp);
+									context.response.reply(`You aswered \`${notifications[i].options[notifications[i].rcpt[j].option]}\``);
+								} else if (resp == 'cancel'){
+									// user cancelled
+									notifications[i].rcpt[j].option = 'c';
+									context.response.reply(`This dialog was cancelled`);
+								}else{
+									//user answered a wrong question
+									context.response.reply(`Please answer with one of the options:\n ${notifications[i].options.join('\n')} \nOr type \`cancel\` to stop answering.`);
+								}
+							}
 						}
 					}
 				}
@@ -338,12 +396,18 @@ module.exports = function (robot) {
 		
 	});
 
-	// Add User
+	// ADD USER
 	robot.respond(/add u(?:ser)? (.+)/i, { params: 'username', requireTarget: true }, async function (res) {
 		//TODO: Checks if username is the sender or the robot
 		var target_name = robot.brain.get('default_target_by_room_' + res.envelope.room);
 		var targets = robot.brain.get('targets_by_room_' + res.envelope.room);
 		new_user = res.params.username.trim();
+		exclude_users = [];
+		exclude_users.push(robot.name);
+		exclude_users.push(robot.alias);
+		exclude_users.push(res.envelope.user.name);
+		console.debug(`>> exclude_users = ${exclude_users}`);
+
 		if (new_user.indexOf('@') > -1){ new_user = new_user.substring('1');} 
 		if (new_user == 'all' || new_user == 'online') {
 			temp_usernames = (new_user == 'all') ? await robot.adapter.api.users.allNames() : await robot.adapter.api.users.onlineNames();
@@ -357,11 +421,15 @@ module.exports = function (robot) {
 			for(user in usernames){
 				// check if User exists
 				if (targets[target_name].indexOf(usernames[user]) == -1){
-					if (targets[target_name].push(usernames[user])) {
-						robot.logger.debug(`User ${usernames[user]} added to ${target_name}\n`);
-						added.push(usernames[user]);
+					if (exclude_users.indexOf(usernames[user])>-1) {
+						console.debug(`${usernames[user]} not added to ${target_name}`);
 					} else {
-						not_added.push(usernames[user]);
+						if (targets[target_name].push(usernames[user])) {
+							robot.logger.debug(`User ${usernames[user]} added to ${target_name}\n`);
+							added.push(usernames[user]);
+						} else {
+							not_added.push(usernames[user]);
+						}
 					}
 				}else{
 					added.push(usernames[user]);
@@ -380,16 +448,19 @@ module.exports = function (robot) {
 
 	});
 
-	// User delete
-	robot.respond(/del(?:ete)? u(?:ser)? (.+)/i, { params: 'username', requireTarget: true }, function (res) {
-		var target_name = robot.brain.get('default_target_by_room_' + res.envelope.room);
-		var targets = robot.brain.get('targets_by_room_' + res.envelope.room);
-		var records = targets[target_name];
+	// DEL USER
+	robot.respond(/del(?:ete)? u(?:ser)? (.+)/i, { params: 'username', requireTarget: true }, async function (res) {
+		let target_name = robot.brain.get('default_target_by_room_' + res.envelope.room);
+		let targets = robot.brain.get('targets_by_room_' + res.envelope.room);
+		let records = targets[target_name];
 		if (records.indexOf(res.params.username.trim()) > -1){
 			try {
-				delete records[records.indexOf(res.params.username.trim())];
-				targets[target_name] = records;
+				//delete records[records.indexOf(res.params.username.trim())];
+				console.debug('>> Records == ' + JSON.stringify(records));
+				console.debug('>> Username == ' + res.params.username.trim());
+				targets[target_name] = await removeFromVet(records,res.params.username.trim());
 				robot.brain.set('targets_by_room_' + res.envelope.room, targets);
+				robot.brain.save();
 			} catch (e) {
 				console.error('something bad happened, user couldn\'t be removed');
 			}finally{
@@ -398,11 +469,13 @@ module.exports = function (robot) {
 		} else {
 			return res.reply(`User ${res.params.username} was not found in ${target_name}!`);
 		}
-		
+		delete target_name;
+		delete targets;
+		delete records;
 		
 	});
 
-	// User list
+	// LIST USERS
 	robot.respond(/l(?:ist) u(?:sers)?/i, {
 				requireTarget: true
 			}, function (res) {
@@ -417,7 +490,7 @@ module.exports = function (robot) {
 		}
 
 	});
-	// Send Notification
+	// SEND
 	robot.respond(/s(?:end)?\s(.+)\s*\n?((?:(.|\n)*\n?)*)/i, { params: 'title, message', requireTarget: true }, async function (res) {
 		defaultTarget = robot.brain.get('default_target_by_room_'+res.envelope.room);
 		if(defaultTarget){
@@ -452,7 +525,7 @@ module.exports = function (robot) {
 		}
 	});
 
-	// Report Notification
+	// REPORT
 	robot.respond(/re(?:port)? (.+)/i, { params: 'title' }, function (res) {
 		//check if title was given 
 		notifications = robot.brain.get('notifications');
@@ -483,6 +556,21 @@ module.exports = function (robot) {
 			msg += msg_not;
 			return res.reply(msg);
 		}
+	});
+
+	// List Notification
+	robot.respond(/l(?:ist)? notifications (.+)/i, { params: 'title' }, function (res) {
+		return res.reply("Not implemented");
+	});
+
+	// Resend Notification
+	robot.respond(/r(?:esend)? (.+)/i, { params: 'title' }, function (res) {
+		return res.reply("Not implemented");
+	});
+
+	// Delete Notification
+	robot.respond(/del(?:ete)? notification (.+)/i, { params: 'title' }, function (res) {
+		return res.reply("Not implemented");
 	});
 
 	// // Catch ALL
