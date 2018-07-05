@@ -31,6 +31,7 @@
     "mongodb": "^3.0.10",
     "mongodb-redact": "^0.1.0",
     "mongodb-url": "^3.0.1",
+    "request": "^2.87.0",
     "underscore": "^1.8.3",
     "yo": "^2.0.2"
   },
