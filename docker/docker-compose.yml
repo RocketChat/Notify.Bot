@@ -1,0 +1,52 @@
+version: '2'
+
+services:
+  mongo:
+    image: mongo
+    volumes:
+    - ./chat/data/db:/data/db
+    - ./chat/data/dump:/dump
+    tty: true
+    command:
+      - mongod
+      - --smallfiles
+      - --oplogSize
+      - '128'
+    ports:
+      - '27017:27017'
+  
+  rocketchat:
+    image: rocketchat/rocket.chat:latest
+    links:
+      - mongo
+    environment:
+      MONGO_URL: 'mongodb://mongo:27017/rocketchat'
+      PORT: '3000'
+      ROOT_URL: 'http://localhost:3000'
+    volumes:
+      - ./chat/uploads:/app/uploads
+    ports:
+      - '3000:3000'
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  # hubot:
+  #   image: diegodorgam/hubot-rocketchat-notify:latest
+  #   links:
+  #      - mongo
+  #   environment:
+  #     ROCKETCHAT_URL: 'https://b3chat.rtm.net.br'
+  #     #ROCKETCHAT_URL: 'http://rocketchat:3000'
+  #     HUBOT_ADAPTER: rocketchat
+  #     HUBOT_NAME: 'Notify'
+  #     HUBOT_DESCRIPTION: 'Creates announcements to all users in Rocket.Chat'
+  #     ROCKETCHAT_ROOM: GENERAL
+  #     RESPOND_TO_DM: "true"
+  #     RESPOND_TO_LIVECHAT: "true"
+  #     ROCKETCHAT_USER: notify
+  #     ROCKETCHAT_PASSWORD: '2k18!Rocket'
+  #     ROCKETCHAT_AUTH: password
+  #     ROCKETCHAT_USESSL: "true"
+  #     HUBOT_LOG_LEVEL: debug
+  #     MONGODB_URL: "mongodb://mongo:27017/rocketchat"
