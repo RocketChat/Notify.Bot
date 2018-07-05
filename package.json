@@ -13,10 +13,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/diegodorgam/hubot-rocketchat-notify.git"
+    "url": "https://github.com/RocketChat/Notify.Bot.git"
   },
   "bugs": {
-    "url": "https://github.com/diegodorgam/hubot-rocketchat-notify/issues"
+    "url": "https://github.com/RocketChat/Notify.Bot/issues"
   },
   "dependencies": {
     "coffeescript": "^2.2.2",
